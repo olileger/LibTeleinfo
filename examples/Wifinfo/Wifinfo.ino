@@ -89,8 +89,9 @@ void UpdateSysinfo(boolean first_call, boolean show_debug)
   int sec = seconds;
   int min = sec / 60;
   int hr = min / 60;
+  long day = hr / 24;
 
-  sprintf_P( buff, PSTR("%02d:%02d:%02d"), hr, min % 60, sec % 60);
+  sprintf_P( buff, PSTR("%ld days %02d h %02d m %02d sec"),day, hr % 24, min % 60, sec % 60);
   sysinfo.sys_uptime = buff;
 }
 
