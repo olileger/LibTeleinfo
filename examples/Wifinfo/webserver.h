@@ -33,6 +33,7 @@
 // ===================================================
 extern char response[];
 extern uint16_t response_idx;
+extern int      nb_reconnect;
 
 // declared exported function from route.cpp
 // ===================================================

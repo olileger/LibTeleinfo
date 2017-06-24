@@ -401,6 +401,26 @@ void getSysJSONData(String & response)
   response += sysinfo.sys_uptime;
   response += "\"},\r\n";
 
+  if (WiFi.status() == WL_CONNECTED)
+  {
+      response += "{\"na\":\"Wifi RSSI\",\"va\":\"";
+      response += WiFi.RSSI();
+      response += " dB\"},\r\n";
+      response += "{\"na\":\"Wifi network\",\"va\":\"";
+      response += config.ssid;
+      response += "\"},\r\n";
+      uint8_t mac[] = {0, 0, 0, 0, 0, 0};
+      uint8_t* macread = WiFi.macAddress(mac);
+      char macaddress[20];
+      sprintf_P(macaddress, PSTR("%02x:%02x:%02x:%02x:%02x:%02x"), macread[0], macread[1], macread[2], macread[3], macread[4], macread[5]);
+      response += "{\"na\":\"Adresse MAC station\",\"va\":\"";
+      response += macaddress;
+      response += "\"},\r\n";
+  }
+  response += "{\"na\":\"Nb reconnexions Wifi\",\"va\":\"";
+  response += nb_reconnect;
+  response += "\"},\r\n"; 
+  
   response += "{\"na\":\"WifInfo Version\",\"va\":\"" WIFINFO_VERSION "\"},\r\n";
 
   response += "{\"na\":\"Compile le\",\"va\":\"" __DATE__ " " __TIME__ "\"},\r\n";
@@ -514,7 +534,7 @@ void getConfJSONData(String & r)
   r+=CFG_FORM_JDOM_URL;  r+=FPSTR(FP_QCQ); r+=config.jeedom.url;    r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_JDOM_KEY;  r+=FPSTR(FP_QCQ); r+=config.jeedom.apikey; r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_JDOM_ADCO; r+=FPSTR(FP_QCQ); r+=config.jeedom.adco;   r+= FPSTR(FP_QCNL); 
-  r+=CFG_FORM_JDOM_FREQ; r+=FPSTR(FP_QCQ); r+=config.jeedom.freq;  
+  r+=CFG_FORM_JDOM_FREQ; r+=FPSTR(FP_QCQ); r+=config.jeedom.freq;   r+= FPSTR(FP_QCNL); 
 
   r+=CFG_FORM_HTTPREQ_HOST; r+=FPSTR(FP_QCQ); r+=config.httpReq.host;   r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_HTTPREQ_PORT; r+=FPSTR(FP_QCQ); r+=config.httpReq.port;   r+= FPSTR(FP_QCNL); 

@@ -34,6 +34,7 @@
 #include <NeoPixelBus.h>
 #include <LibTeleinfo.h>
 #include <FS.h>
+#include <SPI.h>
 
 // Global project file
 #include "Wifinfo.h"
@@ -74,6 +75,9 @@ unsigned long seconds = 0;
 // sysinfo data
 _sysinfo sysinfo;
 
+// count Wifi connect attempts, to check stability
+int       nb_reconnect = 0;
+
 /* ======================================================================
 Function: UpdateSysinfo 
 Purpose : update sysinfo variables
@@ -89,8 +93,9 @@ void UpdateSysinfo(boolean first_call, boolean show_debug)
   int sec = seconds;
   int min = sec / 60;
   int hr = min / 60;
+  long day = hr / 24;
 
-  sprintf_P( buff, PSTR("%02d:%02d:%02d"), hr, min % 60, sec % 60);
+  sprintf_P( buff, PSTR("%ld days %02d h %02d m %02d sec"),day, hr % 24, min % 60, sec % 60);
   sysinfo.sys_uptime = buff;
 }
 
@@ -477,6 +482,7 @@ int WifiHandleConn(boolean setup = false)
     // connected ? disable AP, client mode only
     if (ret == WL_CONNECTED)
     {
+      nb_reconnect++;         // increase reconnections count
       DebuglnF("connected!");
       WiFi.mode(WIFI_STA);
 
