@@ -19,6 +19,15 @@
 //
 // Edit : Tab size set to 2 but I converted tab to sapces
 //
+// Modifié par Dominique DAMBRAIN 2017-07-10 (http://www.dambrain.fr)
+//       Version 1.0.5
+//       Librairie LibTeleInfo : Allocation statique d'un tableau de stockage 
+//           des variables (50 entrées) afin de proscrire les malloc/free
+//           pour éviter les altérations des noms & valeurs
+//       Modification en conséquence des séquences de scanning du tableau
+//       ATTENTION : Nécessite probablement un ESP-8266 type Wemos D1,
+//        car les variables globales occupent 42.284 octets
+//
 // **********************************************************************************
 
 #ifndef LibTeleinfo_h
@@ -76,18 +85,22 @@
 #pragma pack(push)  // push current alignment to stack
 #pragma pack(1)     // set alignment to 1 byte boundary
 
+
+
 // Linked list structure containing all values received
+// Will be allocated statically 
 typedef struct _ValueList ValueList;
 struct _ValueList 
 {
-  ValueList *next; // next element
-  uint8_t checksum;// checksum
-  uint8_t flags;   // specific flags
-  char  * name;    // LABEL of value name
-  char  * value;   // value 
+  ValueList *next;  // next element (for compatibility)
+  char name[16];    // LABEL of value name
+  char value[16];   // value 
+  uint8_t checksum; // checksum
+  uint8_t flags;    // specific flags
+  uint8_t free;		// checksum
+  uint8_t filler;   // unused, for boundary
 };
 
-#pragma pack(pop)
 
 // Library state machine
 enum _State_e {

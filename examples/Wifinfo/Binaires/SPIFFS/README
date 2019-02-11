@@ -1,0 +1,6 @@
+Attention : Le fichier wifinfo.spiffs.bin disponible dans ce dossier
+ne peut être utilisé que sur une Wemos D1 mini configurée pour 1M de sketch et 3M de SPIFFS
+
+Si vous utilisez un module différent, vous devrez compiler vous-même le fichier SPIFFS
+avec Arduino IDE configuré pour votre module....
+

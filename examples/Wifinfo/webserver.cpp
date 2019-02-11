@@ -16,6 +16,8 @@
 //
 // History : V1.00 2015-06-14 - First release
 //
+//   Modified by Doume 2017-06-29 : Try to avoid polluted ListedValues with Triphase counter
+//
 // All text above must be included in any redistribution.
 //
 // **********************************************************************************
@@ -30,6 +32,16 @@ const char FP_QCQ[] PROGMEM = "\":\"";
 const char FP_QCNL[] PROGMEM = "\",\r\n\"";
 const char FP_RESTART[] PROGMEM = "OK, Redémarrage en cours\r\n";
 const char FP_NL[] PROGMEM = "\r\n";
+
+//List of authorized value names in Teleinfo, to detect polluted entries
+const String tabnames[35] = { 
+  "ADCO" , "OPTARIF" , "ISOUSC" , "BASE", "HCHC" , "HCHP",
+   "IMAX" , "IINST" , "PTEC", "PMAX", "PAPP", "HHPHC" , "MOTDETAT" , "PPOT",
+   "IINST1" , "IINST2" , "IINST3", "IMAX1" , "IMAX2" , "IMAX3" , 
+  "EJPHN" , "EJPHPM" , "BBRHCJB" , "BBRHPJB", "BBRHCJW" , "BBRHPJW" , "BBRHCJR" ,
+  "BBRHPJR" , "PEJP" , "DEMAIN" , "ADPS" , "ADIR1", "ADIR2" , "ADIR3"
+  };
+
 
 /* ======================================================================
 Function: formatSize 
@@ -197,6 +209,12 @@ void handleFormConfig(void)
     }
     config.httpReq.freq = itemp;
 
+    itemp = server.arg("httpreq_swidx").toInt();
+    if (itemp > 0 && itemp <= 65535)
+      config.httpReq.swidx = itemp;
+    else
+      config.httpReq.swidx = 0;
+
     if ( saveConfig() ) {
       ret = 200;
       response = "OK";
@@ -292,77 +310,76 @@ Comments: -
 ====================================================================== */
 void tinfoJSONTable(void)
 {
+   // we're there
+  ESP.wdtFeed();  //Force software wadchog to restart from 0
+
   ValueList * me = tinfo.getList();
   String response = "";
 
   // Just to debug where we are
-  Debug(F("Serving /tinfo page...\r\n"));
+  //Debug(F("Serving /tinfo page...\r\n"));
 
+  if (! me ) //&& first_info_call) 
+  {
+    //Let tinfo such time to build a list....
+    first_info_call=false;
+    unsigned long topdebut = millis();
+    bool expired = false;
+    while (! expired ) {
+      if( (millis() - topdebut ) >= 3000 ) {
+        expired = true;   // 3 seconds delay expired
+      } else {
+        yield();  //Let CPU to other threads
+      }
+    }
+    // continue, hoping list values is now ready
+    me = tinfo.getList();
+  }
+  //tinfo.valuesDump(); 
   // Got at least one ?
   if (me) {
     uint8_t index=0;
-
+    
+    first_info_call=false;
     boolean first_item = true;
     // Json start
     response += F("[\r\n");
 
     // Loop thru the node
     while (me->next) {
+      index++;
 
-      // we're there
-      ESP.wdtFeed();
+      if(! first_item) 
+        // go to next node
+        me = me->next;
 
-      // go to next node
-      me = me->next;
+ 
 
-      // First item do not add , separator
-      if (first_item)
-        first_item = false;
-      else
-        response += F(",\r\n");
-
-/*
-      Debug(F("(")) ;
-      Debug(++index) ;
-      Debug(F(") ")) ;
-
-      if (me->name) Debug(me->name) ;
-      else Debug(F("NULL")) ;
-
-      Debug(F("=")) ;
-
-      if (me->value) Debug(me->value) ;
-      else Debug(F("NULL")) ;
-
-      Debug(F(" '")) ;
-      Debug(me->checksum) ;
-      Debug(F("' ")); 
-
-      // Flags management
-      if ( me->flags) {
-        Debug(F("Flags:0x")); 
-        Debugf("%02X => ", me->flags); 
-        if ( me->flags & TINFO_FLAGS_EXIST)
-          Debug(F("Exist ")) ;
-        if ( me->flags & TINFO_FLAGS_UPDATED)
-          Debug(F("Updated ")) ;
-        if ( me->flags & TINFO_FLAGS_ADDED)
-          Debug(F("New ")) ;
+      if( ! me->free ) {
+        // First item do not add , separator
+        if (first_item)
+          first_item = false;
+        else 
+          response += F(",\r\n");
+          
+        if(validate_value_name(me->name)) {
+          //It's a known name : process the entry      
+          response += F("{\"na\":\"");
+          response +=  me->name ;
+          response += F("\", \"va\":\"") ;
+          response += me->value;
+          response += F("\", \"ck\":\"") ;
+          if (me->checksum == '"' || me->checksum == '\\' || me->checksum == '/')
+            response += '\\';
+          response += (char) me->checksum;
+          response += F("\", \"fl\":");
+          response += me->flags ;
+          response += '}' ;
+        } else {
+          //Don't put this line in table : name is corrupted !
+          need_reinit=true;
+        }
       }
-
-      Debugln() ;
-*/
-      response += F("{\"na\":\"");
-      response +=  me->name ;
-      response += F("\", \"va\":\"") ;
-      response += me->value;
-      response += F("\", \"ck\":\"") ;
-      if (me->checksum == '"' || me->checksum == '\\' || me->checksum == '/')
-        response += '\\';
-      response += (char) me->checksum;
-      response += F("\", \"fl\":");
-      response += me->flags ;
-      response += '}' ;
 
     }
    // Json end
@@ -372,14 +389,12 @@ void tinfoJSONTable(void)
     Debugln(F("sending 404..."));
     server.send ( 404, "text/plain", "No data" );
   }
-  Debug(F("sending..."));
+  //Debug(F("sending..."));
   server.send ( 200, "text/json", response );
-  Debugln(F("OK!"));
+  //Debugln(response);
+  //Debugln(F("OK!"));
+  yield();  //Let a chance to other threads to work
 }
-
-
-
-
 
 /* ======================================================================
 Function: getSysJSONData 
@@ -400,7 +415,17 @@ void getSysJSONData(String & response)
   response += "{\"na\":\"Uptime\",\"va\":\"";
   response += sysinfo.sys_uptime;
   response += "\"},\r\n";
-
+  
+#ifdef SENSOR
+  response += "{\"na\":\"Switch\",\"va\":\"";
+  if (SwitchState) 
+    response += F("Open");  //switch ouvert
+  else
+    response += F("Closed");  //switch fermé
+    
+  response += "\"},\r\n";  
+#endif
+  
   if (WiFi.status() == WL_CONNECTED)
   {
       response += "{\"na\":\"Wifi RSSI\",\"va\":\"";
@@ -419,6 +444,10 @@ void getSysJSONData(String & response)
   }
   response += "{\"na\":\"Nb reconnexions Wifi\",\"va\":\"";
   response += nb_reconnect;
+  response += "\"},\r\n"; 
+  
+  response += "{\"na\":\"Altérations Data détectées\",\"va\":\"";
+  response += nb_reinit;
   response += "\"},\r\n"; 
   
   response += "{\"na\":\"WifInfo Version\",\"va\":\"" WIFINFO_VERSION "\"},\r\n";
@@ -492,13 +521,35 @@ Comments: -
 void sysJSONTable()
 {
   String response = "";
-  
+
+  ESP.wdtFeed();  //Force software watchdog to restart from 0
   getSysJSONData(response);
 
   // Just to debug where we are
-  Debug(F("Serving /system page..."));
+  //Debug(F("Serving /system page..."));
   server.send ( 200, "text/json", response );
+  //Debugln(F("Ok!"));
+  yield();  //Let a chance to other threads to work
+}
+
+/* ======================================================================
+Function: emoncmsJSONTable (added by Doume)
+Purpose : prepare the JSON table needed to fill emoncms server with values
+            some values have been translated, because emoncms only
+            accept numeric values
+Input   : -
+Output  : Teleinfo values translated and filtered
+Comments: -
+====================================================================== */
+void emoncmsJSONTable()
+{
+  Debug(F("Serving /emoncms.json page..."));
+  String response = build_emoncms_json(); 
+
+  server.send ( 200, "text/json", response );
+  //Debugln(response);
   Debugln(F("Ok!"));
+  yield();  //Let a chance to other threads to work
 }
 
 
@@ -528,18 +579,17 @@ void getConfJSONData(String & r)
   r+=CFG_FORM_EMON_FREQ; r+=FPSTR(FP_QCQ); r+=config.emoncms.freq;   r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_OTA_AUTH;  r+=FPSTR(FP_QCQ); r+=config.ota_auth;       r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_OTA_PORT;  r+=FPSTR(FP_QCQ); r+=config.ota_port;       r+= FPSTR(FP_QCNL);
-
   r+=CFG_FORM_JDOM_HOST; r+=FPSTR(FP_QCQ); r+=config.jeedom.host;   r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_JDOM_PORT; r+=FPSTR(FP_QCQ); r+=config.jeedom.port;   r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_JDOM_URL;  r+=FPSTR(FP_QCQ); r+=config.jeedom.url;    r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_JDOM_KEY;  r+=FPSTR(FP_QCQ); r+=config.jeedom.apikey; r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_JDOM_ADCO; r+=FPSTR(FP_QCQ); r+=config.jeedom.adco;   r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_JDOM_FREQ; r+=FPSTR(FP_QCQ); r+=config.jeedom.freq;   r+= FPSTR(FP_QCNL); 
-
   r+=CFG_FORM_HTTPREQ_HOST; r+=FPSTR(FP_QCQ); r+=config.httpReq.host;   r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_HTTPREQ_PORT; r+=FPSTR(FP_QCQ); r+=config.httpReq.port;   r+= FPSTR(FP_QCNL); 
   r+=CFG_FORM_HTTPREQ_PATH; r+=FPSTR(FP_QCQ); r+=config.httpReq.path;   r+= FPSTR(FP_QCNL);  
-  r+=CFG_FORM_HTTPREQ_FREQ; r+=FPSTR(FP_QCQ); r+=config.httpReq.freq;  
+  r+=CFG_FORM_HTTPREQ_FREQ; r+=FPSTR(FP_QCQ); r+=config.httpReq.freq;   r+= FPSTR(FP_QCNL);   
+  r+=CFG_FORM_HTTPREQ_SWIDX; r+=FPSTR(FP_QCQ); r+=config.httpReq.swidx;  
   
 
   r+= F("\""); 
@@ -558,11 +608,13 @@ Comments: -
 void confJSONTable()
 {
   String response = "";
+  //ESP.wdtFeed();  //Force software watchdog to restart from 0
   getConfJSONData(response);
   // Just to debug where we are
   Debug(F("Serving /config page..."));
   server.send ( 200, "text/json", response );
   Debugln(F("Ok!"));
+  yield();  //Let a chance to other threads to work
 }
 
 /* ======================================================================
@@ -630,8 +682,10 @@ Comments: -
 void spiffsJSONTable()
 {
   String response = "";
+  //ESP.wdtFeed();  //Force software watchdog to restart from 0
   getSpiffsJSONData(response);
   server.send ( 200, "text/json", response );
+  yield();  //Let a chance to other threads to work
 }
 
 /* ======================================================================
@@ -644,9 +698,13 @@ Comments: -
 ====================================================================== */
 void sendJSON(void)
 {
+  boolean first_item = true;
   ValueList * me = tinfo.getList();
   String response = "";
   
+  ESP.wdtFeed();  //Force software watchdog to restart from 0
+
+  Debug(F("Serving /json page..."));
   // Got at least one ?
   if (me) {
     // Json start
@@ -656,13 +714,25 @@ void sendJSON(void)
 
     // Loop thru the node
     while (me->next) {
-      // go to next node
-      me = me->next;
-      response += F(",\"") ;
-      response += me->name ;
-      response += F("\":") ;
-      formatNumberJSON(response, me->value);
-    }
+      if(! first_item) 
+          // go to next node
+          me = me->next;
+        
+      if( ! me->free ) {
+        if (first_item)
+            first_item = false;
+          
+        if(validate_value_name(me->name)) {
+          //It's a known name : process the entry
+          response += F(",\"") ;
+          response += me->name ;
+          response += F("\":") ;
+          formatNumberJSON(response, me->value);
+        } else {
+          need_reinit=true;
+        } // name validity
+      } //free entry
+    } //while
    // Json end
    response += FPSTR(FP_JSON_END) ;
 
@@ -670,6 +740,9 @@ void sendJSON(void)
     server.send ( 404, "text/plain", "No data" );
   }
   server.send ( 200, "text/json", response );
+  //Debugln(response);
+  Debugln(F("Ok!"));
+  yield();  //Let a chance to other threads to work
 }
 
 
@@ -722,6 +795,7 @@ void wifiScanJSON(void)
   Debug(F("sending..."));
   server.send ( 200, "text/json", response );
   Debugln(F("Ok!"));
+  yield();  //Let a chance to other threads to work
 }
 
 
@@ -795,7 +869,8 @@ void handleNotFound(void)
     // convert uri to char * for compare
     uri = server.uri().c_str();
 
-    Debugf("handleNotFound(%s)\r\n", uri);
+    sprintf(buff,"handleNotFound(%s)\r\n", uri);
+    Debug(buff);
 
     // Got at least one and consistent URI ?
     if (me && uri && *uri=='/' && *++uri ) {
@@ -849,5 +924,23 @@ void handleNotFound(void)
 
   // Led off
   LedBluOFF();
+}
+/* ======================================================================
+Function: validate_value_name
+Purpose : check if value name is in known range of values....
+Input   : name to check
+Output  : true if OK, false otherwise
+Comments: -
+====================================================================== */
+bool validate_value_name(String name)
+{
+	
+  for (int i=0 ; i < 35; i++ ) {
+    if( (tabnames[i].length() == name.length()) && (tabnames[i] == name) ) {
+      return true;
+    }
+  }
+	return false; //Not an existing name !
+  //return true;
 }
 

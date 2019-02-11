@@ -69,6 +69,7 @@
 #define CFG_FORM_AP_PSK   FPSTR("ap_psk")
 #define CFG_FORM_OTA_AUTH FPSTR("ota_auth")
 #define CFG_FORM_OTA_PORT FPSTR("ota_port")
+#define CFG_FORM_DBGFILE  FPSTR("dbg_file")
 
 #define CFG_FORM_EMON_HOST  FPSTR("emon_host")
 #define CFG_FORM_EMON_PORT  FPSTR("emon_port")
@@ -88,6 +89,7 @@
 #define CFG_FORM_HTTPREQ_PORT  FPSTR("httpreq_port")
 #define CFG_FORM_HTTPREQ_PATH  FPSTR("httpreq_path")
 #define CFG_FORM_HTTPREQ_FREQ  FPSTR("httpreq_freq")
+#define CFG_FORM_HTTPREQ_SWIDX FPSTR("httpreq_swidx")
 
 #define CFG_FORM_IP  FPSTR("wifi_ip");
 #define CFG_FORM_GW  FPSTR("wifi_gw");
@@ -128,9 +130,10 @@ typedef struct
 {
   char  host[CFG_HTTPREQ_HOST_SIZE+1];  // FQDN 
   char  path[CFG_HTTPREQ_PATH_SIZE+1];  // Path
-  uint16_t port;                        // Protocol port (HTTP/HTTPS)
+  uint16_t port;                        // Protocol port (HTTP/HTTPS) 
   uint32_t freq;                        // refresh rate
-  uint8_t filler[24];                   // in case adding data in config avoiding loosing current conf by bad crc*/
+  uint16_t swidx;                       // Switch index (into Domoticz)
+  uint8_t filler[22];                   // in case adding data in config avoiding loosing current conf by bad crc*/
 } _httpRequest;
 
 // Config saved into eeprom
@@ -154,7 +157,8 @@ typedef struct
 
 // Exported variables/object instancied in main sketch
 // ===================================================
-extern _Config config;
+extern _Config      config;
+extern char         buff[];
 
 #pragma pack(pop)
  

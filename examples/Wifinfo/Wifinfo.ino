@@ -18,6 +18,28 @@
 //
 // All text above must be included in any redistribution.
 //
+// Modifié par Dominique DAMBRAIN 2017-07-10 (http://www.dambrain.fr)
+//       Version 1.0.5
+//       Librairie LibTeleInfo : Allocation statique d'un tableau de stockage 
+//           des variables (50 entrées) afin de proscrire les malloc/free
+//           pour éviter les altérations des noms & valeurs
+//       Modification en conséquence des séquences de scanning du tableau
+//       ATTENTION : Nécessite probablement un ESP-8266 type Wemos D1,
+//        car les variables globales occupent 42.284 octets
+//
+//       Version 1.0.5a (11/01/2018)
+//       Permettre la mise à jour OTA à partir de fichiers .ino.bin (Auduino IDE 1.8.3)
+//       Ajout de la gestion d'un switch (Contact sec) relié à GND et D5 (GPIO-14)
+//          Décommenter le #define SENSOR dans Wifinfo.h
+//          Pour être utilisable avec Domoticz, au moins l'URL du serveur et le port
+//          doivent être renseignés dans la configuration HTTP Request, ainsi que 
+//          l'index du switch (déclaré dans Domoticz)
+//          L'état du switch (On/Off) est envoyé à Domoticz au boot, et à chaque
+//            changement d'état
+//       Note : Nécessité de flasher le SPIFFS pour pouvoir configurer l'IDX du switch
+//              et flasher le sketch winfinfo.ino.bin via interface Web
+//       Rendre possible la compilation si define SENSOR en commentaire
+//              et DEFINE_DEBUG en commentaire (aucun debug, version Production...)
 // **********************************************************************************
 // Include Arduino header
 #include <Arduino.h>
@@ -41,7 +63,6 @@
 
 //WiFiManager wifi(0);
 ESP8266WebServer server(80);
-
 bool ota_blink;
 
 // Teleinfo
@@ -70,13 +91,37 @@ volatile boolean task_1_sec = false;
 volatile boolean task_emoncms = false;
 volatile boolean task_jeedom = false;
 volatile boolean task_httpRequest = false;
+volatile boolean task_updsw = false;
 unsigned long seconds = 0;
-
+char buff[132];   //To format debug strings
 // sysinfo data
 _sysinfo sysinfo;
 
 // count Wifi connect attempts, to check stability
-int       nb_reconnect = 0;
+int          nb_reconnect = 0;
+bool	       need_reinit = false;
+unsigned int nb_reinit = 0;
+bool         first_info_call=true;
+
+#ifdef SIMU
+//for tests
+uint8_t flags = 8;
+int loop_cpt = 60000;
+String name2 = "HCHC";
+char * s2 = (char *)name2.c_str();
+String value2 = "000060000";
+char * v2 = (char *) value2.c_str();
+#endif
+
+#ifdef SENSOR
+// Le contact sec devra etre connecte entre GND et D5 (GPIO-14)
+const int   SensorPin = 14; 
+int         reading ;  
+int         SwitchState = -1;       // the current reading from the input pin
+int         lastSwitchState = -1;   // the previous reading from the input pin
+unsigned long lastChangeTime = 0;  // the last time the input pin was toggled
+unsigned long tempo = 200;    // temps necessaire a la stabilisation du switch (0,2 seconde)
+#endif
 
 /* ======================================================================
 Function: UpdateSysinfo 
@@ -111,7 +156,6 @@ void Task_1_Sec()
   task_1_sec = true;
   seconds++;
 }
-
 /* ======================================================================
 Function: Task_emoncms
 Purpose : callback of emoncms ticker
@@ -298,8 +342,8 @@ void NewFrame(ValueList * me)
     rgb_ticker.once_ms( (uint32_t) BLINK_LED_MS, LedOff, (int) RGB_LED_PIN);
   }
 
-  sprintf_P( buff, PSTR("New Frame (%ld Bytes free)"), ESP.getFreeHeap() );
-  Debugln(buff);
+  //sprintf_P( buff, PSTR("New Frame (%ld Bytes free)"), ESP.getFreeHeap() );
+  //Debugln(buff);
 }
 
 /* ======================================================================
@@ -322,8 +366,8 @@ void UpdatedFrame(ValueList * me)
     rgb_ticker.once_ms(BLINK_LED_MS, LedOff, RGB_LED_PIN);
   }
 
-  sprintf_P( buff, PSTR("Updated Frame (%ld Bytes free)"), ESP.getFreeHeap() );
-  Debugln(buff);
+  //sprintf_P( buff, PSTR("Updated Frame (%ld Bytes free)"), ESP.getFreeHeap() );
+  //Debugln(buff);
 
 /*
   // Got at least one ?
@@ -410,13 +454,16 @@ Comments: -
 int WifiHandleConn(boolean setup = false) 
 {
   int ret = WiFi.status();
-
+  char  toprint[20];
+  IPAddress ad;
+  
   if (setup) {
-
+#ifdef DEBUG
     DebuglnF("========== SDK Saved parameters Start"); 
     WiFi.printDiag(DEBUG_SERIAL);
     DebuglnF("========== SDK Saved parameters End"); 
     Debugflush();
+#endif
 
     // no correct SSID
     if (!*config.ssid) {
@@ -485,8 +532,9 @@ int WifiHandleConn(boolean setup = false)
       nb_reconnect++;         // increase reconnections count
       DebuglnF("connected!");
       WiFi.mode(WIFI_STA);
-
-      DebugF("IP address   : "); Debugln(WiFi.localIP());
+      ad = WiFi.localIP();
+      sprintf(toprint,"%d.%d.%d.%d", ad[0],ad[1],ad[2],ad[3]);
+      DebugF("IP address   : "); Debugln(toprint);
       DebugF("MAC address  : "); Debugln(WiFi.macAddress());
     
     // not connected ? start AP
@@ -556,13 +604,35 @@ Input   : -
 Output  : - 
 Comments: -
 ====================================================================== */
-void setup()
-{
-  char buff[32];
+void setup() {
+
   boolean reset_config = true;
 
   // Set CPU speed to 160MHz
   system_update_cpu_freq(160);
+
+  // Check File system init 
+#ifdef DEBUG
+  DEBUG_SERIAL.begin(115200);
+#endif
+
+  if (! SPIFFS.begin() )
+  {
+    // Serious problem
+    DebuglnF("SPIFFS Mount failed !");
+  } else {
+    DebuglnF("");
+    DebuglnF("SPIFFS Mount succesfull");
+
+    Dir dir = SPIFFS.openDir("/");
+    while (dir.next()) {    
+      String fileName = dir.fileName();
+      size_t fileSize = dir.fileSize();
+      sprintf(buff,"FS File: %s, size: %d\n", fileName.c_str(), fileSize);
+      Debug(buff);
+    }
+    DebuglnF("");
+  }
 
   //WiFi.disconnect(false);
 
@@ -578,12 +648,11 @@ void setup()
   // Init the serial 1, Our Debug Serial TXD0
   // note this serial can only transmit, just 
   // enough for debugging purpose
-  DEBUG_SERIAL.begin(115200);
   Debugln(F("\r\n\r\n=============="));
   Debug(F("WifInfo V"));
   Debugln(F(WIFINFO_VERSION));
   Debugln();
-  Debugflush();
+//  Debugflush();
 
   // Clear our global flags
   config.config = 0;
@@ -596,30 +665,14 @@ void setup()
   DebugF(" (emoncms=");   Debug(sizeof(_emoncms));
   DebugF("  jeedom=");   Debug(sizeof(_jeedom));
   DebugF("  http request=");   Debug(sizeof(_httpRequest));
-  Debugln(')');
-  Debugflush();
+  Debugln(" )");
+//  Debugflush();
 
-  // Check File system init 
-  if (!SPIFFS.begin())
-  {
-    // Serious problem
-    DebuglnF("SPIFFS Mount failed");
-  } else {
-   
-    DebuglnF("SPIFFS Mount succesfull");
-
-    Dir dir = SPIFFS.openDir("/");
-    while (dir.next()) {    
-      String fileName = dir.fileName();
-      size_t fileSize = dir.fileSize();
-      Debugf("FS File: %s, size: %d\n", fileName.c_str(), fileSize);
-    }
-    DebuglnF("");
-  }
+  
   
   // Read Configuration from EEP
   if (readConfig()) {
-      DebuglnF("Good CRC, not set!");
+      DebuglnF("Good CRC, not set! From now, we can use EEPROM config !");
   } else {
     // Reset Configuration
     ResetConfig();
@@ -650,7 +703,7 @@ void setup()
 
   ArduinoOTA.onEnd([]() { 
     LedRGBOFF();
-    DebuglnF("Update finished restarting");
+    DebuglnF("Update finished : restarting");
   });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
@@ -665,12 +718,15 @@ void setup()
 
   ArduinoOTA.onError([](ota_error_t error) {
     LedRGBON(COLOR_RED);
-    Debugf("Update Error[%u]: ", error);
+#ifdef DEBUG
+    sprintf(buff,"Update Error[%u]: ", error);
+    Debug(buff);
     if (error == OTA_AUTH_ERROR) DebuglnF("Auth Failed");
     else if (error == OTA_BEGIN_ERROR) DebuglnF("Begin Failed");
     else if (error == OTA_CONNECT_ERROR) DebuglnF("Connect Failed");
     else if (error == OTA_RECEIVE_ERROR) DebuglnF("Receive Failed");
     else if (error == OTA_END_ERROR) DebuglnF("End Failed");
+#endif
     ESP.restart(); 
   });
 
@@ -681,6 +737,7 @@ void setup()
   server.on("/config_form.json", handleFormConfig);
   server.on("/json", sendJSON);
   server.on("/tinfo.json", tinfoJSONTable);
+  server.on("/emoncms.json", emoncmsJSONTable);
   server.on("/system.json", sysJSONTable);
   server.on("/config.json", confJSONTable);
   server.on("/spiffs.json", spiffsJSONTable);
@@ -712,7 +769,8 @@ void setup()
       if(upload.status == UPLOAD_FILE_START) {
         uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
         WiFiUDP::stopAll();
-        Debugf("Update: %s\n", upload.filename.c_str());
+        sprintf(buff,"Update: %s\n", upload.filename.c_str());
+        Debug(buff);
         LedRGBON(COLOR_MAGENTA);
         ota_blink = true;
 
@@ -733,9 +791,10 @@ void setup()
 
       } else if(upload.status == UPLOAD_FILE_END) {
         //true to set the size to the current progress
-        if(Update.end(true)) 
-          Debugf("Update Success: %u\nRebooting...\n", upload.totalSize);
-        else 
+        if(Update.end(true)) {
+          sprintf(buff,"Update Success: %u\nRebooting...\n", upload.totalSize);
+          Debug(buff);
+        } else 
           Update.printError(Serial1);
 
         LedRGBOFF();
@@ -747,9 +806,10 @@ void setup()
       }
       delay(0);
     }
-  );
-
-  // All other not known 
+    );
+  
+    ///////////////////////////////////////////////////////
+   // All other not known 
   server.onNotFound(handleNotFound);
   
   // serves all SPIFFS Web file with 24hr max-age control
@@ -766,7 +826,7 @@ void setup()
 
   // Teleinfo is connected to RXD2 (GPIO13) to 
   // avoid conflict when flashing, this is why
-  // we swap RXD1/RXD1 to RXD2/TXD2 
+  // we swap RXD1/TXD1 to RXD2/TXD2 
   // Note that TXD2 is not used teleinfo is receive only
   #ifdef DEBUG_SERIAL1
     Serial.begin(1200, SERIAL_7E1);
@@ -774,6 +834,7 @@ void setup()
   #endif
 
   // Init teleinfo
+  need_reinit=false;
   tinfo.init();
 
   // Attach the callback we need
@@ -803,6 +864,29 @@ void setup()
   // HTTP Request Update if needed
   if (config.httpReq.freq) 
     Tick_httpRequest.attach(config.httpReq.freq, Task_httpRequest);
+
+//To simulate Teleinfo on not connected module
+#ifdef SIMU
+    String name1 = "ADCO";
+    String value1 = "01234546789012";
+    
+    char * s1 = (char *)name1.c_str();
+    char * v1 = (char *)value1.c_str();
+    flags = TINFO_FLAGS_ADDED;
+    tinfo.addCustomValue(s1, v1, &flags); //ADCO arbitrary value
+    tinfo.addCustomValue(s2, v2, &flags); //counter value
+    flags = TINFO_FLAGS_NONE;
+    tinfo.valuesDump();
+#endif
+
+#ifdef SENSOR
+  pinMode(SensorPin, INPUT_PULLUP);
+  DebuglnF("Switch sensor initialized");
+  reading = digitalRead(SensorPin);
+  sprintf(buff,"Initial State: %d\n", reading);
+  Debug(buff);
+#endif
+
 }
 
 /* ======================================================================
@@ -822,10 +906,24 @@ void loop()
 
   //webSocket.loop();
 
-  // Only once task per loop, let system do it own task
+  // Only once task per loop, let system do its own task
   if (task_1_sec) { 
     UpdateSysinfo(false, false); 
     task_1_sec = false; 
+    
+//To simulate Teleinfo on not connected module
+#ifdef SIMU
+    loop_cpt++;
+    if(loop_cpt % 10)
+    {
+      // each 10 second, try to change HCHC value
+      //Increase v2 value
+      sprintf(v2, "%09d", (loop_cpt) );
+      // and update ListValues
+      flags = TINFO_FLAGS_UPDATED;
+      tinfo.addCustomValue(s2, v2, &flags);   
+    }
+#endif
   } else if (task_emoncms) { 
     emoncmsPost(); 
     task_emoncms=false; 
@@ -835,16 +933,56 @@ void loop()
   } else if (task_httpRequest) { 
     httpRequest();  
     task_httpRequest=false;
+  } 
+#ifdef SENSOR
+  else if (task_updsw) { 
+    UPD_switch();  
+    task_updsw=false;
   }
 
-  // Handle teleinfo serial
-  if ( Serial.available() ) {
-    // Read Serial and process to tinfo
-    c = Serial.read();
-    //Serial1.print(c);
-    tinfo.process(c);
+ // read the state of the switch into a local variable:
+  reading = digitalRead(SensorPin);
+
+  // check to see if you just pressed the button
+  // (i.e. the input went from LOW to HIGH), and you've waited long enough
+  // since the last press to ignore any noise:
+
+  // If the switch changed, due to noise or pressing:
+  if (reading != lastSwitchState) {
+    // reset the debouncing timer
+    lastChangeTime = millis();
+    lastSwitchState = reading;
   }
 
-  //delay(10);
+  if ((millis() - lastChangeTime) > tempo) {
+    // whatever the reading is at, it's been there for longer than the tempo
+    // delay, so take it as the actual current state:
+
+    // if the switch state has changed:
+    if (reading != SwitchState) {
+      sprintf(buff,"Switch changed from  %d to %d\n", SwitchState, reading);
+      Debug(buff);
+      SwitchState = reading;
+      //Notify HTTP server that switch has changed, on next loop
+      task_updsw=true;
+    }
+  }
+#endif
+
+  if (need_reinit) {
+    //Some polluted entries have been detected in Teleinfo ListValues
+		need_reinit=false;
+    nb_reinit++;    //account of reinit operations, for system infos
+		tinfo.init();		//Clear ListValues, buffer, and wait for next STX
+  } else {
+	  // Handle teleinfo serial
+	  if ( Serial.available() ) {
+	    // Read Serial and process to tinfo
+	    c = Serial.read();
+	    tinfo.process(c);
+    }
+
+    //delay(10);
+  }
+
 }
-

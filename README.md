@@ -1,7 +1,37 @@
 # Teleinfo Universal Library
 This is a fork of Teleinfo Universal Library for the ESP8266 MCU  
 This is a generic Teleinfo French Meter Measure Library  
-- Github source : <https://github.com/hallard/LibTeleinfo>
+- Initial Github source : <https://github.com/hallard/LibTeleinfo>
+- Modified Github source : <https://github.com/Doume/LibTeleinfo>
+
+# Modifications par Doume (version 1.0.5) :
+
+- Add support for request /emoncms.json
+
+        return a json list formated to interface emoncms server from a 3rd party 
+        That allow to don't activate emoncms http client inside Wifinfo module
+	
+- Add possibility to compile a version of sketch for module not connected to EDF counter
+
+        Activate #define SIMU into Wifinfo.h, to obtain a version which will create
+         2 variables and update one of them each second, to verify package
+	 
+- Add a check on variable names, and force a reinit of LibTeleinfo interface if an
+  alteration is detected (each restart is counted, and displayed in 'system' page )
+  
+- Change library LibTeleinfo.cpp, to don't use anymore malloc/free system APIs
+
+		Variables are now stored in static table, allocated on start
+		
+			50 entries max, name length 16 bytes max, value length 16 bytes max
+			
+		To use this library version :
+		
+			First, backup your old version of LibTeleinfo....
+			
+			copy files src/LibTeleinfo.cpp and src/LibTeleinfo.h into your Arduino
+			environment (generally ~/Arduino/libraries/LibTeleinfo-master/src )
+			before to compile sketch
 
 # Added features :
 - Add possibility to configure HttpRequest to send parameters/values to Domoticz

@@ -1,0 +1,8 @@
+Le fichier Wifinfo.ino.bin disponible dans ce dossier a été compilé
+avec l'option DEBUG activée (sur Serial1) et la gestion d'un contact sec
+entre Ground et D5 (option SENSOR activée)
+
+Il peut être flashé via port série (outil ESPTOOL), 
+ou via l'interface Web de Wifinfo, à condition que vous ayez au préalable
+flashé le SPIFFS permettant la prise en compte des fichiers .ino.bin 
+

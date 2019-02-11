@@ -62,11 +62,13 @@ void eepromDump(uint8_t bytesPerRow)
     // First byte of the row ?
     if (j==0) {
 			// Display Address
-      Debugf("%04X : ", i);
+      sprintf(buff,"%04X : ", i);
+      Debug(buff);
     }
 
     // write byte in hex form
-    Debugf("%02X ", EEPROM.read(i));
+    sprintf(buff,"%02X ", EEPROM.read(i));
+    Debug(buff);
 
 		// Last byte of the row ?
     // start a new line
@@ -153,11 +155,13 @@ bool saveConfig (void)
   ret_code = readConfig(false);
   
   Debug(F("Write config "));
-  
+
+#ifdef DEBUG
   if (ret_code)
     Debugln(F("OK!"));
   else
     Debugln(F("Error!"));
+#endif
 
   //eepromDump(32);
   
@@ -185,10 +189,11 @@ void showConfig()
   if (config.config & CFG_RGB_LED) DebugF(" RGB"); 
   if (config.config & CFG_DEBUG)   DebugF(" DEBUG"); 
   if (config.config & CFG_LCD)     DebugF(" LCD"); 
+ 
 
   DebuglnF("\r\n===== Emoncms"); 
   DebugF("host     :"); Debugln(config.emoncms.host); 
-  DebugF("port     :"); Debugln(config.emoncms.port); 
+  DebugF("port     :"); Debugln((int)config.emoncms.port); 
   DebugF("url      :"); Debugln(config.emoncms.url); 
   DebugF("key      :"); Debugln(config.emoncms.apikey); 
   DebugF("node     :"); Debugln(config.emoncms.node); 
@@ -207,5 +212,6 @@ void showConfig()
   DebugF("port     :"); Debugln(config.httpReq.port); 
   DebugF("path     :"); Debugln(config.httpReq.path); 
   DebugF("freq     :"); Debugln(config.httpReq.freq); 
+  DebugF("sw idx   :"); Debugln(config.httpReq.swidx); 
 }
 

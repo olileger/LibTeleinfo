@@ -19,9 +19,22 @@
 //
 // Edit : Tab size set to 2 but I converted tab to sapces
 //
+// Modifié par Dominique DAMBRAIN 2017-07-10 (http://www.dambrain.fr)
+//       Version 1.0.5
+//       Librairie LibTeleInfo : Allocation statique d'un tableau de stockage 
+//           des variables (50 entrées) afin de proscrire les malloc/free
+//           pour éviter les altérations des noms & valeurs
+//       Modification en conséquence des séquences de scanning du tableau
+//       ATTENTION : Nécessite probablement un ESP-8266 type Wemos D1,
+//        car les variables globales occupent 42.284 octets
+//
 // **********************************************************************************
 
 #include "LibTeleinfo.h" 
+int ValueItem = 0;					//Index of next position to use
+struct _ValueList ValuesTab[50];	//Allocate static table of 50 items
+									// to don't use anymore malloc & free
+
 
 /* ======================================================================
 Class   : TInfo
@@ -32,11 +45,25 @@ Comments: -
 ====================================================================== */
 TInfo::TInfo()
 {
+	ValueList * me;
   // Init of our linked list
+/*
   _valueslist.name = NULL;
   _valueslist.value = NULL;
+*/
+/*
   _valueslist.checksum = '\0';
   _valueslist.flags = TINFO_FLAGS_NONE;
+*/
+	for(int i = 0; i < 50; i++) {
+		me = &ValuesTab[i];
+		memset(&ValuesTab[i], 0, sizeof(_ValueList) );	//Also reset the 'free' marker
+		me->free=1;		//Init each entry as free
+		me->flags = TINFO_FLAGS_NONE;
+		if(i < 49)
+			me->next = &ValuesTab[i+1];
+	}
+
 
   // callback
   _fn_ADPS = NULL;
@@ -177,12 +204,12 @@ Comments: - state of the label changed by the function
 ====================================================================== */
 ValueList * TInfo::valueAdd(char * name, char * value, uint8_t checksum, uint8_t * flags)
 {
-  // Get our linked list 
-  ValueList * me = &_valueslist;
-
+  
   uint8_t lgname = strlen(name);
   uint8_t lgvalue = strlen(value);
   uint8_t thischeck = calcChecksum(name,value);
+	int firstfree = -1;
+  ValueList * me;
   
   // just some paranoia 
   if (thischeck != checksum ) {
@@ -190,121 +217,76 @@ ValueList * TInfo::valueAdd(char * name, char * value, uint8_t checksum, uint8_t
     TI_Debug('=');
     TI_Debug(value);
     TI_Debug(F(" '"));
-    TI_Debug((char) cheksum);
+    TI_Debug((char) checksum);
     TI_Debug(F("' Not added bad checksum calculated '"));
     TI_Debug((char) thischeck);
     TI_Debugln(F("'"));
   } else  {
     // Got one and all seems good ?
-    if (me && lgname && lgvalue && checksum) {
-      // Create pointer on the new node
-      ValueList *newNode = NULL;
-      ValueList *parNode = NULL ;
+    if (lgname && lgvalue && checksum) {
+		// Parameters seems to be coherent
+		// Scan the existing table
+		int i;
+		for(i=0; i < ValueItem, i < 50 ; i++) {
+			me = &ValuesTab[i];
+			if( ! me->free) {
+				if (strncmp(me->name, name, lgname) == 0) {
+					//entry found for the same value name : reuse it !
+					if (strncmp(me->value, value, lgvalue) == 0) {
+						*flags |= TINFO_FLAGS_EXIST;
+						me->flags = *flags;
+						return ( me );
+		      		} else {
+						//Exist, but value changed
+						*flags |= TINFO_FLAGS_UPDATED;
+						me->flags = *flags ;
+						// Copy new value
+						memset(me->value, 0, 16);
+						memcpy(me->value, value , lgvalue );
+						me->checksum = checksum ;
 
-      // Loop thru the node
-      while (me->next) {
-        // save parent node
-        parNode = me ;
+						// That's all
+						return (me);	
+					}
+				} //name comparison
+			} else {
+				//This entry is free
+				if(firstfree < 0)
+					firstfree=i;	//It's the 1st one detected
+			}
+		} //for
 
-        // go to next node
-        me = me->next;
+		//No existing entry for this name : Create a new one
+		if(firstfree >= 0) {
+			//Use the 1st free entry found
+			i=firstfree;
+		} else {
+			if(i < 50)
+				ValueItem=i;	//Note new entry as last one
+			else
+				return ( (ValueList *) NULL ); //Table saturated !
+		}
 
-        // Check if we already have this LABEL
-        if (strncmp(me->name, name, lgname) == 0) {
-          // Already got also this value, return US
-          if (strncmp(me->value, value, lgvalue) == 0) {
-            *flags |= TINFO_FLAGS_EXIST;
-            me->flags = *flags;
-            return ( me );
-          } else {
-            // We changed the value
-            *flags |= TINFO_FLAGS_UPDATED;
-            me->flags = *flags ;
-            // Do we have enought space to hold new value ?
-            if (strlen(me->value) >= lgvalue ) {
-              // Copy it
-              strncpy(me->value, value , lgvalue );
-              me->checksum = checksum ;
+      // i points the entry to use : get our buffer Safe
+	  me = &ValuesTab[i];
+      memset(me, 0, sizeof(_ValueList) );	//Also reset the 'free' marker
+      me->checksum = checksum;
+	  if(i < 49)
+			me->next = &ValuesTab[i+1];
 
-              // That's all
-              return (me);
-            } else {
-              // indicate our parent node that the next node
-              // is not us anymore but the next we have
-              parNode->next = me->next;
-
-              // free up this node
-              free (me);
-
-              // Return to parent (that will now point on next node and not us)
-              // and continue loop just in case we have sevral with same name
-              me = parNode;
-            }
-          }
-        }
-      }
-
-      // Our linked list structure sizeof(ValueList)
-      // + Name  + '\0'
-      // + Value + '\0'
-      size_t size ;
-      #ifdef ESP8266
-        lgname = ESP8266_allocAlign(lgname+1);   // Align name buffer
-        lgvalue = ESP8266_allocAlign(lgvalue+1); // Align value buffer
-        // Align the whole structure
-        size = ESP8266_allocAlign( sizeof(ValueList) + lgname + lgvalue  )     ; 
-      #else
-        size = sizeof(ValueList) + lgname + 1 + lgvalue + 1  ;
-      #endif
-
-      // Create new node with size to store strings
-      if ((newNode = (ValueList  *) malloc(size) ) == NULL) 
-        return ( (ValueList *) NULL );
-
-      // get our buffer Safe
-      memset(newNode, 0, size);
-      
-      // Put the new node on the list
-      me->next = newNode;
-
-      // First String located after last struct element
-      // Second String located after the First + \0
-      newNode->checksum = checksum;
-      newNode->name = (char *)  newNode + sizeof(ValueList);
-      newNode->value = (char *) newNode->name + lgname + 1;
-
-      // Copy the string data
-      memcpy(newNode->name , name  , lgname );
-      memcpy(newNode->value, value , lgvalue );
-
-      // So we just created this node but was it new
-      // or was matter of text size ?
-      if ( (*flags & TINFO_FLAGS_UPDATED) == 0) {
+	  // Copy the string data (name & value)
+      memcpy(me->name, name  , lgname );
+      memcpy(me->value, value , lgvalue );
+ 	  if ( (*flags & TINFO_FLAGS_UPDATED) == 0) {
         // so we added this node !
         *flags |= TINFO_FLAGS_ADDED ;
-        newNode->flags = *flags;
+        me->flags = *flags;
       }
-
-      TI_Debug(F("Added '"));
-      TI_Debug(name);
-      TI_Debug('=');
-      TI_Debug(value);
-      TI_Debug(F("' '"));
-      TI_Debug((char) cheksum);
-      TI_Debugln(F("'"));
-
-      // return pointer on the new node
-      return (newNode);
-    }
-
-  } // Checksum OK
-
-
-  // Error or Already Exists
-  return ( (ValueList *) NULL);
-}
-
-
+	  // That's all
+	  return (me);
+	 }
+	} //Checksum check
+}	
 
 /* ======================================================================
 Function: valueRemoveFlagged
@@ -315,40 +297,21 @@ Comments: -
 ====================================================================== */
 boolean TInfo::valueRemoveFlagged(uint8_t flags)
 {
-  boolean deleted = false;
+  	boolean deleted = false;
+	int i;
+	ValueList * me;
 
-  // Get our linked list 
-  ValueList * me = &_valueslist;
-  ValueList *parNode = NULL ;
-
-  // Got one and all seems good ?
-  if (me) {
-    // Loop thru the node
-    while (me->next) {
-      // save parent node
-      parNode = me ;
-
-      // go to next node
-      me = me->next;
-
-      // found the flags?
-      if (me->flags & flags ) {
-        // indicate our parent node that the next node
-        // is not us anymore but the next we have
-        parNode->next = me->next;
-
-        // free up this node
-        free (me);
-
-        // Return to parent (that will now point on next node and not us)
-        // and continue loop just in case we have sevral with same name
-        me = parNode;
-        deleted = true;
-      }
-    }
-  }
-
-  return (deleted);
+	for(i=0; i < ValueItem, i < 50; i++) {
+		me = &ValuesTab[i];
+		if(! me->free ) {
+			if (me->flags & flags ) {
+				//memset(me, 0, sizeof(_ValueList) );
+				me->free=1;
+				deleted=true;
+			}
+		}
+	}
+	return deleted;
 }
 
 /* ======================================================================
@@ -361,41 +324,26 @@ Comments: -
 boolean TInfo::valueRemove(char * name)
 {
   boolean deleted = false;
-
-  // Get our linked list 
-  ValueList * me = &_valueslist;
-  ValueList *parNode = NULL ;
-
   uint8_t lgname = strlen(name);
+  int i;
+	ValueList * me;
 
-  // Got one and all seems good ?
-  if (me && lgname) {
-    // Loop thru the node
-    while (me->next) {
-      // save parent node
-      parNode = me ;
+	for(i=0 ; i < ValueItem, i < 50; i++) {
+	  me = &ValuesTab[i];
+	  if( ! me->free ) {
+		//This entry is busy
+	  	// found ?
+	  	if (strncmp(me->name, name, lgname) == 0) {
+			memset(me->name, 0, 16 );
+			// free up this entry
+			me->free=1;
 
-      // go to next node
-      me = me->next;
-
-      // found ?
-      if (strncmp(me->name, name, lgname) == 0) {
-        // indicate our parent node that the next node
-        // is not us anymore but the next we have
-        parNode->next = me->next;
-
-        // free up this node
-        free (me);
-
-        // Return to parent (that will now point on next node and not us)
-        // and continue loop just in case we have sevral with same name
-        me = parNode;
-        deleted = true;
-      }
-    }
-  }
-
-  return (deleted);
+			// and continue loop just in case we have several with same name		    
+			deleted = true;
+		}
+	  }
+	}
+	return (deleted);
 }
 
 /* ======================================================================
@@ -408,30 +356,28 @@ Output  : pointer to the value where we filled data NULL is not found
 char * TInfo::valueGet(char * name, char * value)
 {
   // Get our linked list 
-  ValueList * me = &_valueslist;
   uint8_t lgname = strlen(name);
+  int i;
+  ValueList * me;
 
   // Got one and all seems good ?
-  if (me && lgname) {
-
-    // Loop thru the node
-    while (me->next) {
-
-      // go to next node
-      me = me->next;
-
-      // Check if we match this LABEL
-      if (strncmp(me->name, name, lgname) == 0) {
-        // this one has a value ?
-        if (me->value) {
-          // copy to dest buffer
-          uint8_t lgvalue = strlen(me->value);
-          strncpy(value, me->value , lgvalue );
-          return ( value );
+  if (lgname) {
+    // Loop thru the table
+    for(i = 0; i < ValueItem, i < 50; i++) {
+		me = &ValuesTab[i];
+		if( ! me->free) {
+      		// Check if we match this LABEL
+      		if (strncmp(me->name, name, lgname) == 0) {
+        		// copy to dest buffer
+          		uint8_t lgvalue = strlen(me->value);
+          		strncpy(value, me->value , lgvalue );
+          		return ( value );
+			}
         }
-      }
-    }
-  }
+     } //for
+
+  } //lgname
+
   // not found
   return ( NULL);
 }
@@ -444,8 +390,9 @@ Output  : Pointer
 ====================================================================== */
 ValueList * TInfo::getList(void)
 {
+	ValueList * me = &ValuesTab[0];
   // Get our linked list 
-  return &_valueslist;
+  return me;
 }
 
 /* ======================================================================
@@ -457,51 +404,50 @@ Output  : total number of values
 uint8_t TInfo::valuesDump(void)
 {
   // Get our linked list 
-  ValueList * me = &_valueslist;
+  ValueList * me = &ValuesTab[0];
   uint8_t index = 0;
 
   // Got one ?
   if (me) {
     // Loop thru the node
-    while (me->next) {
-      // go to next node
-      me = me->next;
+	for(int i=0; i<50; i++) {
+      me = &ValuesTab[i];
+      if( ! me->free ) {
+		  index++;
+		  TI_Debug(i) ;
+		  TI_Debug(F(") ")) ;
 
-      index++;
-      TI_Debug(index) ;
-      TI_Debug(F(") ")) ;
+		  if (me->name)
+		    TI_Debug(me->name) ;
+		  else
+		    TI_Debug(F("NULL")) ;
 
-      if (me->name)
-        TI_Debug(me->name) ;
-      else
-        TI_Debug(F("NULL")) ;
+		  TI_Debug(F("=")) ;
 
-      TI_Debug(F("=")) ;
+		  if (me->value)
+		    TI_Debug(me->value) ;
+		  else
+		    TI_Debug(F("NULL")) ;
 
-      if (me->value)
-        TI_Debug(me->value) ;
-      else
-        TI_Debug(F("NULL")) ;
+		  TI_Debug(F(" '")) ;
+		  TI_Debug(me->checksum) ;
+		  TI_Debug(F("' ")); 
 
-      TI_Debug(F(" '")) ;
-      TI_Debug(me->checksum) ;
-      TI_Debug(F("' ")); 
-
-      // Flags management
-      if ( me->flags) {
-        TI_Debug(F("Flags:0x")); 
-        TI_Debugf("%02X =>", me->flags); 
-        if ( me->flags & TINFO_FLAGS_EXIST)
-          TI_Debug(F("Exist ")) ;
-        if ( me->flags & TINFO_FLAGS_UPDATED)
-          TI_Debug(F("Updated ")) ;
-        if ( me->flags & TINFO_FLAGS_ADDED)
-          TI_Debug(F("New ")) ;
-      }
-
-      TI_Debugln() ;
-    }
-  }
+		  // Flags management
+		  if ( me->flags) {
+		    TI_Debug(F("Flags:0x")); 
+		    TI_Debugf("%02X =>", me->flags); 
+		    if ( me->flags & TINFO_FLAGS_EXIST)
+		      TI_Debug(F("Exist ")) ;
+		    if ( me->flags & TINFO_FLAGS_UPDATED)
+		      TI_Debug(F("Updated ")) ;
+		    if ( me->flags & TINFO_FLAGS_ADDED)
+		      TI_Debug(F("New ")) ;
+		  }
+		  TI_Debugln() ;
+		} //test if free
+    } //for
+  } //me exists
 
   return index;
 }
@@ -515,14 +461,12 @@ Output  : element numbers
 int TInfo::labelCount()
 {
   int count = 0;
-
-  // Get our linked list 
-  ValueList * me = &_valueslist;
-
-  if (me)
-    while ((me = me->next))
-      count++;
-
+	ValueList * me;
+  for(int i=0 ; i < 50 ; i++) {
+	me = &ValuesTab[i];
+	if( ! me->free)
+		count++;
+  }
   return (count);
 }
 
@@ -534,30 +478,19 @@ Output  : True if Ok False Otherwise
 ====================================================================== */
 boolean TInfo::listDelete()
 {
-  // Get our linked list 
-  ValueList * me = &_valueslist;
 
-  // Got a pointer
-  if (me) {
-    ValueList *current;
+	ValueList * me;
 
-    // For each linked list
-    while ((current = me->next)) {
-      // Get the next
-      me->next =  current->next;
+	for(int i = 0; i < 50; i++) {
+		me = &ValuesTab[i];
+		memset(&ValuesTab[i], 0, sizeof(_ValueList) );	//Also reset the 'free' marker
+		me->free=1;		//Init each entry as free
+		me->flags = TINFO_FLAGS_NONE;
+		if(i < 49)
+			me->next = &ValuesTab[i+1];
+	}
 
-      // Free the current
-      free(current);
-    }
-
-    // Free the top element
-    me->next = NULL ;
-
-    // Ok
-    return (true);
-  }
-
-  return (false);
+	return(true);
 }
 
 /* ======================================================================
